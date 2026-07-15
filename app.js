@@ -24,12 +24,9 @@ const {
 
 const FONT_LINK_ID = "lpl-fonts";
 function ensureFonts() {
-  if (document.getElementById(FONT_LINK_ID)) return;
-  const link = document.createElement("link");
-  link.id = FONT_LINK_ID;
-  link.rel = "stylesheet";
-  link.href = "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap";
-  document.head.appendChild(link);
+  // Intentionally a no-op now: we use system fonts only, to avoid extra
+  // network round-trips to fonts.googleapis.com on slow connections.
+  // Kept as a function so call sites don't need to change.
 }
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -74,6 +71,7 @@ function useStore() {
   const [state, setState] = useState(null);
   const [status, setStatus] = useState("loading"); // loading | ready | error
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -104,8 +102,9 @@ function useStore() {
     setSaving(true);
     try {
       await window.storage.set(STORE_KEY, JSON.stringify(next), true);
+      setSaveError(false);
     } catch (e) {
-      // swallow — local state still updated, will retry on next change
+      setSaveError(true);
     } finally {
       setSaving(false);
     }
@@ -121,7 +120,8 @@ function useStore() {
     state,
     update,
     status,
-    saving
+    saving,
+    saveError
   };
 }
 
@@ -150,7 +150,7 @@ function Odometer({
   };
   return /*#__PURE__*/React.createElement("span", {
     style: {
-      fontFamily: "'JetBrains Mono', monospace",
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontVariantNumeric: "tabular-nums",
       fontSize: sizes[size],
       color: tones[tone],
@@ -353,7 +353,7 @@ function LoginScreen({
     }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       fontWeight: 700,
       fontSize: 20,
       letterSpacing: "0.04em"
@@ -395,7 +395,9 @@ function App() {
   const {
     state,
     update,
-    status
+    status,
+    saving,
+    saveError
   } = useStore();
   const [tab, setTab] = useState("dash");
   const [authed, setAuthed] = useState(false);
@@ -410,7 +412,7 @@ function App() {
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         color: "#8B939B",
-        fontFamily: "'JetBrains Mono', monospace"
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
       }
     }, "загрузка…"));
   }
@@ -422,7 +424,9 @@ function App() {
         button { font-family: inherit; }
         input::placeholder { color: #5A6169; }
       `), /*#__PURE__*/React.createElement(Header, {
-    company: state.company
+    company: state.company,
+    saving: saving,
+    saveError: saveError
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
@@ -457,20 +461,30 @@ const shellStyle = {
   flexDirection: "column",
   maxWidth: 480,
   margin: "0 auto",
-  position: "relative"
+  position: "relative",
+  paddingTop: "env(safe-area-inset-top)",
+  paddingBottom: "env(safe-area-inset-bottom)"
 };
 function Header({
-  company
+  company,
+  saving,
+  saveError
 }) {
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      padding: "18px 16px 14px",
+      padding: "12px 16px 10px",
       borderBottom: "1px solid #21272D",
       position: "sticky",
       top: 0,
       background: "#14181Cee",
       backdropFilter: "blur(6px)",
       zIndex: 5
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -488,20 +502,18 @@ function Header({
     }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       fontWeight: 700,
       fontSize: 17,
       letterSpacing: "0.04em"
     }
   }, company)), /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: "#5B7A93",
-      fontFamily: "'JetBrains Mono', monospace",
-      marginTop: 3,
-      letterSpacing: "0.04em"
+      fontSize: 10.5,
+      fontWeight: 600,
+      color: saveError ? "#C1553B" : saving ? "#E8A33D" : "#5FA976"
     }
-  }, "ФИНАНСОВАЯ ПАНЕЛЬ · КАССА"));
+  }, saveError ? "⚠ не сохранено" : saving ? "сохранение…" : "✓ сохранено")));
 }
 function BottomNav({
   tab,
@@ -537,7 +549,8 @@ function BottomNav({
       background: "#14181Cf5",
       backdropFilter: "blur(6px)",
       maxWidth: 480,
-      width: "100%"
+      width: "100%",
+      paddingBottom: "env(safe-area-inset-bottom)"
     }
   }, items.map(it => {
     const active = tab === it.id;
@@ -548,22 +561,22 @@ function BottomNav({
         flex: 1,
         background: "none",
         border: "none",
-        padding: "10px 0 12px",
+        padding: "7px 0 8px",
         color: active ? "#E8A33D" : "#5A6169",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: 3,
+        gap: 2,
         cursor: "pointer"
       }
     }, /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 18,
+        fontSize: 16,
         lineHeight: 1
       }
     }, it.glyph), /*#__PURE__*/React.createElement("span", {
       style: {
-        fontSize: 10.5,
+        fontSize: 10,
         fontWeight: 600
       }
     }, it.label));
@@ -1093,7 +1106,7 @@ function SplitCard({
       borderTop: "1px dashed #2C333A",
       fontSize: 12,
       color: diff === 0 ? "#5FA976" : "#C1553B",
-      fontFamily: "'JetBrains Mono', monospace"
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
     }
   }, /*#__PURE__*/React.createElement("span", null, diff === 0 ? "✓ сходится с фактурой" : "⚠ расхождение"), /*#__PURE__*/React.createElement("span", null, diff !== 0 ? `${diff > 0 ? "+" : ""}${fmt(diff)}` : "")), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1204,7 +1217,7 @@ function SplitForm({
       fontSize: 13,
       margin: "10px 0 16px",
       color: diff === 0 ? "#5FA976" : "#C1553B",
-      fontFamily: "'JetBrains Mono', monospace"
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
     }
   }, /*#__PURE__*/React.createElement("span", null, "Остаток к распределению"), /*#__PURE__*/React.createElement("span", null, fmt(diff), " zł")), /*#__PURE__*/React.createElement("button", {
     onClick: submit,
@@ -1417,7 +1430,7 @@ function SectionTitle({
 }) {
   return /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       fontSize: 14,
       fontWeight: 600,
       margin: "6px 0 8px 2px",
@@ -2129,7 +2142,7 @@ function Sheet({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Space Grotesk', sans-serif",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       fontWeight: 700,
       fontSize: 16
     }
