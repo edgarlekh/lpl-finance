@@ -9,7 +9,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="theme-color" content="#14181C" />
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+
+<!-- Warm up connections to the two CDNs we actually use, in parallel with HTML parsing -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+<link rel="preload" as="script" href="app.js" />
+
 <style>
   html,body{margin:0;padding:0;background:#14181C;}
   *{box-sizing:border-box;}
@@ -20,6 +25,9 @@
 </head>
 <body>
 <div id="root"></div>
+
+<!-- React + ReactDOM combined into a single request (jsDelivr's /combine endpoint) -->
+<script crossorigin src="https://cdn.jsdelivr.net/combine/npm/react@18/umd/react.production.min.js,npm/react-dom@18/umd/react-dom.production.min.js"></script>
 
 <!-- Firebase (script-tag / CDN style, no build step) -->
 <script type="module">
@@ -56,10 +64,6 @@
 
   window.dispatchEvent(new Event("firebase-ready"));
 </script>
-
-<!-- React (CDN, no npm build) -->
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
 <script src="app.js"></script>
 </body>
