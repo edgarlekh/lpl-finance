@@ -36,7 +36,7 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const monthKey = iso => iso.slice(0, 7);
 function fmt(n) {
   const v = Math.round(Number(n) || 0);
-  return v.toLocaleString("ru-RU");
+  return v.toLocaleString("pl-PL");
 }
 const DEFAULT_STATE = {
   version: 1,
@@ -132,7 +132,7 @@ function Odometer({
   size = "lg",
   tone = "hi",
   prefix = "",
-  suffix = " ₽"
+  suffix = " zł"
 }) {
   const sizes = {
     sm: "16px",
@@ -1206,7 +1206,7 @@ function SplitForm({
       color: diff === 0 ? "#5FA976" : "#C1553B",
       fontFamily: "'JetBrains Mono', monospace"
     }
-  }, /*#__PURE__*/React.createElement("span", null, "Остаток к распределению"), /*#__PURE__*/React.createElement("span", null, fmt(diff), " ₽")), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("span", null, "Остаток к распределению"), /*#__PURE__*/React.createElement("span", null, fmt(diff), " zł")), /*#__PURE__*/React.createElement("button", {
     onClick: submit,
     style: primaryBtnStyle
   }, "Сохранить разбивку"));
