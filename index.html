@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>LPL LOGISTICS</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#14181C" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
+<style>
+  html,body{margin:0;padding:0;background:#14181C;}
+  *{box-sizing:border-box;}
+  ::-webkit-scrollbar{width:0;height:0;}
+  button{font-family:inherit;}
+  input::placeholder{color:#5A6169;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Firebase (script-tag / CDN style, no build step) -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDm-xzXVF6yqtTC7n6WAXT2rpb685GdfcQ",
+    authDomain: "lpl-finance.firebaseapp.com",
+    projectId: "lpl-finance",
+    storageBucket: "lpl-finance.firebasestorage.app",
+    messagingSenderId: "582725375303",
+    appId: "1:582725375303:web:8f96027df629b273496862"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const STORE_DOC = doc(db, "lpl", "store");
+
+  // Bridge exposed to the React app below (kept API-compatible with window.storage)
+  window.storage = {
+    async get(key) {
+      const snap = await getDoc(STORE_DOC);
+      if (!snap.exists()) return null;
+      const data = snap.data();
+      if (!(key in data)) return null;
+      return { key, value: data[key], shared: true };
+    },
+    async set(key, value) {
+      await setDoc(STORE_DOC, { [key]: value }, { merge: true });
+      return { key, value, shared: true };
+    },
+  };
+
+  window.dispatchEvent(new Event("firebase-ready"));
+</script>
+
+<!-- React (CDN, no npm build) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react" src="app.js"></script>
+</body>
+</html>
