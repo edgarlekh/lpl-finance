@@ -32,8 +32,11 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const monthKey = iso => iso.slice(0, 7);
 function fmt(n) {
-  const v = Math.round(Number(n) || 0);
-  return v.toLocaleString("pl-PL");
+  const v = Number(n) || 0;
+  return v.toLocaleString("pl-PL", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  });
 }
 const DEFAULT_STATE = {
   version: 1,
