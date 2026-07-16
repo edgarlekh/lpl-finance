@@ -32,7 +32,7 @@
 <!-- Firebase (script-tag / CDN style, no build step) -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyDm-xzXVF6yqtTC7n6WAXT2rpb685GdfcQ",
@@ -59,6 +59,15 @@
     async set(key, value) {
       await setDoc(STORE_DOC, { [key]: value }, { merge: true });
       return { key, value, shared: true };
+    },
+    // Live subscription: calls back with the raw string value whenever the
+    // shared document changes (including changes made by other devices).
+    listen(key, callback) {
+      return onSnapshot(STORE_DOC, (snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data();
+        if (key in data) callback(data[key]);
+      });
     },
   };
 
