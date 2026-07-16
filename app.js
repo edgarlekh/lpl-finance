@@ -74,28 +74,49 @@ function useStore() {
   const [saveError, setSaveError] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await window.storage.get(STORE_KEY, true);
+    let unsubscribe = null;
+    if (window.storage.listen) {
+      // Live mode: fires immediately with current data, then again on every
+      // change made by this device OR any partner's device.
+      unsubscribe = window.storage.listen(STORE_KEY, rawValue => {
         if (cancelled) return;
-        if (res && res.value) {
-          const parsed = JSON.parse(res.value);
+        try {
+          const parsed = rawValue ? JSON.parse(rawValue) : {};
           setState({
             ...DEFAULT_STATE,
             ...parsed
           });
-        } else {
-          setState(DEFAULT_STATE);
+        } catch (e) {
+          setState(prev => prev || DEFAULT_STATE);
         }
         setStatus("ready");
-      } catch (e) {
-        if (cancelled) return;
-        setState(DEFAULT_STATE);
-        setStatus("ready");
-      }
-    })();
+      });
+    } else {
+      // Fallback: one-time load (older bridge without live listening)
+      (async () => {
+        try {
+          const res = await window.storage.get(STORE_KEY, true);
+          if (cancelled) return;
+          if (res && res.value) {
+            const parsed = JSON.parse(res.value);
+            setState({
+              ...DEFAULT_STATE,
+              ...parsed
+            });
+          } else {
+            setState(DEFAULT_STATE);
+          }
+          setStatus("ready");
+        } catch (e) {
+          if (cancelled) return;
+          setState(DEFAULT_STATE);
+          setStatus("ready");
+        }
+      })();
+    }
     return () => {
       cancelled = true;
+      if (unsubscribe) unsubscribe();
     };
   }, []);
   const persist = useCallback(async next => {
@@ -585,11 +606,13 @@ function BottomNav({
 
 /* ================= LEDGER (Касса) ================= */
 
+const RECEIPT_PROXY_URL = "https://lpl-receipt-proxy.edgar-lekh99.workers.dev";
 function Ledger({
   state,
   update
 }) {
   const [showForm, setShowForm] = useState(false);
+  const [showScan, setShowScan] = useState(false);
   const [filterMethod, setFilterMethod] = useState("all");
   const period = usePeriod();
   const list = useMemo(() => {
@@ -604,6 +627,16 @@ function Ledger({
       }]
     }));
     setShowForm(false);
+  }
+  function addManyTx(txs) {
+    update(prev => ({
+      ...prev,
+      transactions: [...prev.transactions, ...txs.map(tx => ({
+        id: uid(),
+        ...tx
+      }))]
+    }));
+    setShowScan(false);
   }
   function removeTx(id) {
     update(prev => ({
@@ -623,7 +656,10 @@ function Ledger({
     key: m,
     active: filterMethod === m,
     onClick: () => setFilterMethod(m)
-  }, m === "all" ? "Всё" : m === "cash" ? "Наличка" : "Карта"))), list.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+  }, m === "all" ? "Всё" : m === "cash" ? "Наличка" : "Карта"))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowScan(true),
+    style: scanButtonStyle
+  }, "📷 Загрузить скриншот банка"), list.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
     title: "Пока нет операций",
     hint: "Добавьте первую запись кнопкой ниже"
   }) : /*#__PURE__*/React.createElement("div", {
@@ -643,8 +679,264 @@ function Ledger({
     categories: state.categories,
     onCancel: () => setShowForm(false),
     onSave: addTx
+  }), showScan && /*#__PURE__*/React.createElement(ReceiptScanForm, {
+    onCancel: () => setShowScan(false),
+    onSave: addManyTx
   }));
 }
+const scanButtonStyle = {
+  width: "100%",
+  padding: "12px",
+  borderRadius: 12,
+  border: "1px dashed #5B7A93",
+  background: "#5B7A9314",
+  color: "#8FB0C4",
+  fontWeight: 600,
+  fontSize: 14,
+  cursor: "pointer",
+  marginBottom: 12
+};
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      const base64 = result.split(",")[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+function ReceiptScanForm({
+  onCancel,
+  onSave
+}) {
+  const [stage, setStage] = useState("pick"); // pick | loading | review | error
+  const [rows, setRows] = useState([]);
+  const [errorMsg, setErrorMsg] = useState("");
+  async function handleFile(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setStage("loading");
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await fetch(RECEIPT_PROXY_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          image: base64,
+          mediaType: file.type || "image/png"
+        })
+      });
+      if (!res.ok) throw new Error("Сервис распознавания недоступен");
+      const data = await res.json();
+      if (!data.transactions || data.transactions.length === 0) {
+        setErrorMsg("Не удалось найти операции на скриншоте. Попробуйте другой скриншот или добавьте вручную.");
+        setStage("error");
+        return;
+      }
+      setRows(data.transactions.map(t => ({
+        date: t.date || todayISO(),
+        amount: t.amount != null ? String(t.amount) : "",
+        type: t.type === "income" ? "income" : "expense",
+        method: t.method === "cash" ? "cash" : "card",
+        category: t.suggestedCategory || "",
+        comment: t.comment || "",
+        include: true
+      })));
+      setStage("review");
+    } catch (err) {
+      setErrorMsg("Ошибка распознавания. Проверьте интернет-соединение и попробуйте снова.");
+      setStage("error");
+    }
+  }
+  function updateRow(i, patch) {
+    setRows(prev => prev.map((r, idx) => idx === i ? {
+      ...r,
+      ...patch
+    } : r));
+  }
+  function submit() {
+    const toSave = rows.filter(r => r.include && r.amount).map(r => ({
+      date: r.date,
+      amount: Number(r.amount),
+      type: r.type,
+      method: r.method,
+      category: r.category || (r.type === "income" ? "Доход" : "Прочее"),
+      comment: r.comment
+    }));
+    if (toSave.length === 0) return;
+    onSave(toSave);
+  }
+  return /*#__PURE__*/React.createElement(Sheet, {
+    title: "Скриншот банка",
+    onClose: onCancel
+  }, stage === "pick" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: "#8B939B",
+      marginBottom: 14
+    }
+  }, "Загрузите скриншот банковской выписки — операции распознаются автоматически, вы сможете проверить и поправить их перед сохранением."), /*#__PURE__*/React.createElement("label", {
+    style: pickFileLabelStyle
+  }, "Выбрать скриншот", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    onChange: handleFile,
+    style: {
+      display: "none"
+    }
+  }))), stage === "loading" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: "center",
+      padding: "30px 0",
+      color: "#8B939B"
+    }
+  }, "Распознаём скриншот…"), stage === "error" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#C1553B",
+      fontSize: 13.5,
+      marginBottom: 14
+    }
+  }, errorMsg), /*#__PURE__*/React.createElement("label", {
+    style: pickFileLabelStyle
+  }, "Попробовать снова", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    onChange: handleFile,
+    style: {
+      display: "none"
+    }
+  }))), stage === "review" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#8B939B",
+      marginBottom: 12
+    }
+  }, "Найдено операций: ", rows.length, ". Проверьте и поправьте перед сохранением."), rows.map((r, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      border: "1px solid #262D33",
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 10,
+      opacity: r.include ? 1 : 0.4
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      fontSize: 12.5
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: r.include,
+    onChange: e => updateRow(i, {
+      include: e.target.checked
+    })
+  }), "включить"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement(Pill, {
+    active: r.type === "income",
+    tone: "green",
+    onClick: () => updateRow(i, {
+      type: "income"
+    })
+  }, "Доход"), /*#__PURE__*/React.createElement(Pill, {
+    active: r.type === "expense",
+    tone: "rust",
+    onClick: () => updateRow(i, {
+      type: "expense"
+    })
+  }, "Расход"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: r.amount,
+    onChange: e => updateRow(i, {
+      amount: e.target.value
+    }),
+    placeholder: "Сумма",
+    style: {
+      ...inputStyle,
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: r.date,
+    onChange: e => updateRow(i, {
+      date: e.target.value
+    }),
+    style: {
+      ...inputStyle,
+      width: 130
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement(Pill, {
+    active: r.method === "cash",
+    onClick: () => updateRow(i, {
+      method: "cash"
+    })
+  }, "Наличка"), /*#__PURE__*/React.createElement(Pill, {
+    active: r.method === "card",
+    onClick: () => updateRow(i, {
+      method: "card"
+    })
+  }, "Карта")), /*#__PURE__*/React.createElement("input", {
+    value: r.category,
+    onChange: e => updateRow(i, {
+      category: e.target.value
+    }),
+    placeholder: "Категория",
+    style: {
+      ...inputStyle,
+      marginBottom: 8
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    value: r.comment,
+    onChange: e => updateRow(i, {
+      comment: e.target.value
+    }),
+    placeholder: "Комментарий",
+    style: inputStyle
+  }))), /*#__PURE__*/React.createElement("button", {
+    onClick: submit,
+    style: primaryBtnStyle
+  }, "Сохранить выбранные операции")));
+}
+const pickFileLabelStyle = {
+  display: "block",
+  textAlign: "center",
+  padding: "14px",
+  borderRadius: 12,
+  border: "1px solid #E8A33D",
+  color: "#E8A33D",
+  fontWeight: 700,
+  cursor: "pointer"
+};
 function PeriodBar({
   period
 }) {
