@@ -156,10 +156,11 @@ function Odometer({
   size = "lg",
   tone = "hi",
   prefix = "",
-  suffix = " zł"
+  suffix = "\u00A0zł"
 }) {
   const sizes = {
     sm: "16px",
+    sm2: "18px",
     md: "20px",
     lg: "30px",
     xl: "40px"
@@ -172,6 +173,7 @@ function Odometer({
     steel: "#5B7A93",
     lo: "#8B939B"
   };
+  const formatted = fmt(value).replace(/\s/g, "\u00A0");
   return /*#__PURE__*/React.createElement("span", {
     style: {
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -179,9 +181,10 @@ function Odometer({
       fontSize: sizes[size],
       color: tones[tone],
       fontWeight: 600,
-      letterSpacing: "0.02em"
+      letterSpacing: "0.02em",
+      whiteSpace: "nowrap"
     }
-  }, prefix, fmt(value), /*#__PURE__*/React.createElement("span", {
+  }, prefix, formatted, /*#__PURE__*/React.createElement("span", {
     style: {
       opacity: 0.55,
       fontWeight: 500
@@ -617,10 +620,16 @@ function Ledger({
   const [showForm, setShowForm] = useState(false);
   const [showScan, setShowScan] = useState(false);
   const [filterMethod, setFilterMethod] = useState("all");
+  const [search, setSearch] = useState("");
   const period = usePeriod();
   const list = useMemo(() => {
-    return state.transactions.filter(t => period.inRange(t.date)).filter(t => filterMethod === "all" || t.method === filterMethod).sort((a, b) => a.date < b.date ? 1 : -1);
-  }, [state.transactions, period, filterMethod]);
+    const q = search.trim().toLowerCase();
+    return state.transactions.filter(t => period.inRange(t.date)).filter(t => filterMethod === "all" || t.method === filterMethod).filter(t => {
+      if (!q) return true;
+      const haystack = `${t.category || ""} ${t.comment || ""}`.toLowerCase();
+      return haystack.includes(q);
+    }).sort((a, b) => a.date < b.date ? 1 : -1);
+  }, [state.transactions, period, filterMethod, search]);
   function addTx(tx) {
     update(prev => ({
       ...prev,
@@ -659,12 +668,38 @@ function Ledger({
     key: m,
     active: filterMethod === m,
     onClick: () => setFilterMethod(m)
-  }, m === "all" ? "Всё" : m === "cash" ? "Наличка" : "Карта"))), /*#__PURE__*/React.createElement("button", {
+  }, m === "all" ? "Всё" : m === "cash" ? "Наличка" : "Карта"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    value: search,
+    onChange: e => setSearch(e.target.value),
+    placeholder: "Поиск по категории или комментарию…",
+    style: {
+      ...inputStyle,
+      paddingRight: search ? 34 : 12
+    }
+  }), search && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSearch(""),
+    style: {
+      position: "absolute",
+      right: 8,
+      top: "50%",
+      transform: "translateY(-50%)",
+      background: "none",
+      border: "none",
+      color: "#5A6169",
+      fontSize: 15,
+      cursor: "pointer"
+    }
+  }, "✕")), /*#__PURE__*/React.createElement("button", {
     onClick: () => setShowScan(true),
     style: scanButtonStyle
   }, "📷 Загрузить скриншот банка"), list.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
-    title: "Пока нет операций",
-    hint: "Добавьте первую запись кнопкой ниже"
+    title: search ? "Ничего не найдено" : "Пока нет операций",
+    hint: search ? "Попробуйте другой запрос" : "Добавьте первую запись кнопкой ниже"
   }) : /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -1522,6 +1557,27 @@ function SplitForm({
 
 /* ================= DASHBOARD ================= */
 
+function prevPeriodRange(period) {
+  // Returns an inRange-style predicate for the period immediately preceding
+  // the current one, of the same length — used for "vs previous period".
+  if (period.mode === "month") {
+    const [y, m] = period.month.split("-").map(Number);
+    const prevDate = new Date(y, m - 2, 1); // JS months are 0-indexed
+    const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+    return iso => monthKey(iso) === prevKey;
+  }
+  if (period.mode === "custom") {
+    const from = new Date(period.from);
+    const to = new Date(period.to);
+    const lengthMs = to - from;
+    const prevTo = new Date(from.getTime() - 24 * 60 * 60 * 1000);
+    const prevFrom = new Date(prevTo.getTime() - lengthMs);
+    const prevFromIso = prevFrom.toISOString().slice(0, 10);
+    const prevToIso = prevTo.toISOString().slice(0, 10);
+    return iso => iso >= prevFromIso && iso <= prevToIso;
+  }
+  return null; // "all" mode has no meaningful previous period
+}
 function Dashboard({
   state
 }) {
@@ -1574,6 +1630,28 @@ function Dashboard({
       byCategory: rows
     };
   }, [txInRange]);
+  const comparison = useMemo(() => {
+    const prevInRange = prevPeriodRange(period);
+    if (!prevInRange) return null;
+    let prevIncome = 0,
+      prevExpense = 0;
+    for (const t of state.transactions) {
+      if (!prevInRange(t.date)) continue;
+      if (t.type === "income") prevIncome += t.amount;
+      if (t.type === "expense") prevExpense += t.amount;
+    }
+    const pctChange = (curr, prev) => {
+      if (prev === 0) return curr === 0 ? 0 : null; // no baseline to compare against
+      return (curr - prev) / Math.abs(prev) * 100;
+    };
+    return {
+      prevIncome,
+      prevExpense,
+      prevNet: prevIncome - prevExpense,
+      incomeChange: pctChange(income, prevIncome),
+      expenseChange: pctChange(expense, prevExpense)
+    };
+  }, [period, state.transactions, income, expense]);
   const districtRanking = useMemo(() => {
     const sums = {};
     for (const s of state.incomeSplits) {
@@ -1581,6 +1659,7 @@ function Dashboard({
       for (const a of s.allocations) sums[a.targetId] = (sums[a.targetId] || 0) + Number(a.amount);
     }
     return state.districts.map(d => ({
+      id: d.id,
       name: d.name,
       total: sums[d.id] || 0
     })).sort((a, b) => b.total - a.total);
@@ -1596,10 +1675,35 @@ function Dashboard({
       total: sums[v.id] || 0
     })).sort((a, b) => b.total - a.total);
   }, [state.fuelSplits, state.vehicles, period]);
+  const vehicleProfitability = useMemo(() => {
+    const fuelByVehicle = {};
+    for (const s of state.fuelSplits) {
+      if (!period.inRange(s.date)) continue;
+      for (const a of s.allocations) fuelByVehicle[a.targetId] = (fuelByVehicle[a.targetId] || 0) + Number(a.amount);
+    }
+    const incomeByDistrict = {};
+    for (const s of state.incomeSplits) {
+      if (!period.inRange(s.date)) continue;
+      for (const a of s.allocations) incomeByDistrict[a.targetId] = (incomeByDistrict[a.targetId] || 0) + Number(a.amount);
+    }
+    return (state.vehicles || []).filter(v => v.districtId).map(v => {
+      const revenue = incomeByDistrict[v.districtId] || 0;
+      const cost = fuelByVehicle[v.id] || 0;
+      const district = (state.districts || []).find(d => d.id === v.districtId);
+      return {
+        name: v.name,
+        districtName: district ? district.name : "—",
+        revenue,
+        cost,
+        profit: revenue - cost
+      };
+    }).sort((a, b) => b.profit - a.profit);
+  }, [state.vehicles, state.districts, state.fuelSplits, state.incomeSplits, period]);
   const net = income - expense;
   const maxCat = byCategory[0]?.[1] || 1;
   const maxDist = districtRanking[0]?.total || 1;
   const maxVeh = vehicleRanking[0]?.total || 1;
+  const maxProfit = Math.max(1, ...vehicleProfitability.map(v => Math.abs(v.profit)));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       paddingTop: 14,
@@ -1641,38 +1745,53 @@ function Dashboard({
     }
   }, /*#__PURE__*/React.createElement(Card, {
     style: {
-      flex: 1
+      flex: 1,
+      minWidth: 0
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: smallLabel
   }, "ДОХОД"), /*#__PURE__*/React.createElement(Odometer, {
     value: income,
-    size: "md",
+    size: "sm2",
     tone: "green",
     prefix: "+ "
+  }), comparison && /*#__PURE__*/React.createElement(ChangeBadge, {
+    pct: comparison.incomeChange,
+    goodDirection: "up"
   })), /*#__PURE__*/React.createElement(Card, {
     style: {
-      flex: 1
+      flex: 1,
+      minWidth: 0
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: smallLabel
   }, "РАСХОД"), /*#__PURE__*/React.createElement(Odometer, {
     value: expense,
-    size: "md",
+    size: "sm2",
     tone: "rust",
     prefix: "− "
-  })), /*#__PURE__*/React.createElement(Card, {
+  }), comparison && /*#__PURE__*/React.createElement(ChangeBadge, {
+    pct: comparison.expenseChange,
+    goodDirection: "down"
+  }))), /*#__PURE__*/React.createElement(Card, {
     style: {
-      flex: 1
+      marginBottom: 14
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: smallLabel
-  }, "ИТОГО"), /*#__PURE__*/React.createElement(Odometer, {
+  }, "ИТОГО ЗА ПЕРИОД"), /*#__PURE__*/React.createElement(Odometer, {
     value: net,
     size: "md",
     tone: net >= 0 ? "amber" : "rust",
     prefix: net >= 0 ? "+ " : ""
-  }))), /*#__PURE__*/React.createElement(SectionTitle, null, "Расходы по категориям"), byCategory.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+  })), comparison && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#5B7A93",
+      marginBottom: 14,
+      marginTop: -6
+    }
+  }, "vs предыдущий период: доход ", fmt(comparison.prevIncome), " zł, расход ", fmt(comparison.prevExpense), " zł"), /*#__PURE__*/React.createElement(SectionTitle, null, "Расходы по категориям"), byCategory.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
     title: "Нет расходов за период",
     hint: "Измените период или добавьте операции в Кассе"
   }) : /*#__PURE__*/React.createElement(Card, {
@@ -1703,7 +1822,7 @@ function Dashboard({
     hint: "Добавьте их во вкладке «Разбивки»"
   }) : /*#__PURE__*/React.createElement(Card, {
     style: {
-      marginBottom: 8
+      marginBottom: 16
     }
   }, vehicleRanking.map(v => /*#__PURE__*/React.createElement(BarRow, {
     key: v.name,
@@ -1711,7 +1830,92 @@ function Dashboard({
     value: v.total,
     max: maxVeh,
     tone: "rust"
-  }))));
+  }))), /*#__PURE__*/React.createElement(SectionTitle, null, "Рентабельность машин"), vehicleProfitability.length === 0 ? /*#__PURE__*/React.createElement(Empty, {
+    title: "Привяжите машину к району",
+    hint: "В Справочнике → Машины укажите, за какой район отвечает машина — тогда посчитаем доход минус топливо"
+  }) : /*#__PURE__*/React.createElement(Card, {
+    style: {
+      marginBottom: 8
+    }
+  }, vehicleProfitability.map(v => /*#__PURE__*/React.createElement("div", {
+    key: v.name,
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 13,
+      color: "#ECE9E2"
+    }
+  }, v.name, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#5B7A93",
+      fontSize: 11
+    }
+  }, "· район ", v.districtName)), /*#__PURE__*/React.createElement(Odometer, {
+    value: v.profit,
+    size: "sm",
+    tone: v.profit >= 0 ? "green" : "rust",
+    prefix: v.profit >= 0 ? "+ " : ""
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 4,
+      height: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: Math.max(v.revenue, 1),
+      background: "#5FA976",
+      borderRadius: 4,
+      opacity: 0.85
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: Math.max(v.cost, 1),
+      background: "#C1553B",
+      borderRadius: 4,
+      opacity: 0.85
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      marginTop: 3,
+      fontSize: 10.5,
+      color: "#5B7A93"
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "доход ", fmt(v.revenue), " zł"), /*#__PURE__*/React.createElement("span", null, "топливо ", fmt(v.cost), " zł"))))));
+}
+function ChangeBadge({
+  pct,
+  goodDirection
+}) {
+  if (pct === null) return /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: "#5B7A93",
+      marginTop: 4
+    }
+  }, "новое");
+  const isUp = pct >= 0;
+  const isGood = goodDirection === "up" ? isUp : !isUp;
+  const color = pct === 0 ? "#5B7A93" : isGood ? "#5FA976" : "#C1553B";
+  const arrow = pct === 0 ? "•" : isUp ? "▲" : "▼";
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color,
+      marginTop: 4,
+      fontWeight: 600
+    }
+  }, arrow, " ", Math.abs(pct).toFixed(0), "%");
 }
 const smallLabel = {
   fontSize: 10.5,
@@ -2210,6 +2414,15 @@ function Settings({
         ...v,
         status
       } : v)
+    })),
+    linkOptions: state.districts,
+    linkFieldLabel: "Район (для рентабельности)",
+    onLinkChange: (id, districtId) => update(p => ({
+      ...p,
+      vehicles: p.vehicles.map(v => v.id === id ? {
+        ...v,
+        districtId
+      } : v)
     }))
   }), /*#__PURE__*/React.createElement(CategoryEditor, {
     title: "Категории дохода",
@@ -2231,7 +2444,41 @@ function Settings({
         expense: list
       }
     }))
+  }), /*#__PURE__*/React.createElement(BackupCard, {
+    state: state
   }));
+}
+function BackupCard({
+  state
+}) {
+  function download() {
+    const payload = JSON.stringify(state, null, 2);
+    const blob = new Blob([payload], {
+      type: "application/json"
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `lpl-logistics-backup-${todayISO()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+  return /*#__PURE__*/React.createElement(Card, {
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement(SectionTitle, null, "Резервная копия"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: "#8B939B",
+      marginBottom: 12
+    }
+  }, "Скачайте файл со всеми данными (касса, разбивки, заметки, справочник) — на всякий случай, независимо от базы."), /*#__PURE__*/React.createElement("button", {
+    onClick: download,
+    style: primaryBtnStyle
+  }, "Скачать резервную копию"));
 }
 function ListEditor({
   title,
@@ -2241,7 +2488,10 @@ function ListEditor({
   onRename,
   onRemove,
   onStatusChange,
-  extraField
+  extraField,
+  linkOptions,
+  onLinkChange,
+  linkFieldLabel
 }) {
   const [val, setVal] = useState("");
   const [status, setStatus] = useState("своя");
@@ -2254,10 +2504,14 @@ function ListEditor({
   }, /*#__PURE__*/React.createElement(SectionTitle, null, title), items.map(it => /*#__PURE__*/React.createElement("div", {
     key: it.id,
     style: {
+      padding: "6px 0",
+      borderBottom: "1px solid #1D2328"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
       display: "flex",
       alignItems: "center",
-      gap: 8,
-      padding: "6px 0"
+      gap: 8
     }
   }, editingId === it.id ? /*#__PURE__*/React.createElement("input", {
     value: editVal,
@@ -2293,7 +2547,7 @@ function ListEditor({
     onChange: e => onStatusChange(it.id, e.target.value),
     style: {
       ...inputStyle,
-      width: 96,
+      width: 90,
       padding: "5px 6px",
       fontSize: 12
     }
@@ -2304,7 +2558,35 @@ function ListEditor({
   }, "аренда")), /*#__PURE__*/React.createElement("button", {
     onClick: () => onRemove(it.id),
     style: smallDeleteStyle
-  }, "✕"))), /*#__PURE__*/React.createElement("div", {
+  }, "✕")), linkOptions && onLinkChange && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 6,
+      paddingLeft: 2
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "#5B7A93",
+      whiteSpace: "nowrap"
+    }
+  }, linkFieldLabel, ":"), /*#__PURE__*/React.createElement("select", {
+    value: it.districtId || "",
+    onChange: e => onLinkChange(it.id, e.target.value || null),
+    style: {
+      ...inputStyle,
+      flex: 1,
+      padding: "5px 6px",
+      fontSize: 12
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "не привязана"), linkOptions.map(o => /*#__PURE__*/React.createElement("option", {
+    key: o.id,
+    value: o.id
+  }, o.name)))))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
